@@ -13,12 +13,22 @@ model_data = {
 }
 
 configs = []
+sdconfig = {} # SD webui config
 
 def run(config_path: str, host: str = "127.0.0.1", port: int = 3000):
+    global sdconfig
+
     if config_path:
         config_dict = load_config(config_path)  # function to load your config file
 
         for config in config_dict["models"]:
+            if "type" in config and config["type"] == "sd_webui":
+                sdconfig = config
+                sdconfig["api_key"] = config_dict["api_key"]
+                if "timeout" not in sdconfig:
+                    sdconfig["timeout"] = 600
+                continue
+
             config_model = {
                 "url": f"https://api.runpod.ai/v2/{config['endpoint']}",
                 "api_key": config_dict["api_key"],
@@ -244,26 +254,120 @@ def get_embedding(runpod, embedding):
         raise HTTPException(status_code=408, detail="Request timed out.")
     return data
 
+# stable diffusion webui options
+@router.get('/sdapi/v1/options')
+async def request_sdoptions(request : Request):
+    return {
+        "jpeg_quality": 80,
+        "webp_lossless": False,
+    }
 
-# Function to prepare chat message for SSE
-def prepare_chat_message_for_sse(message: dict) -> str:
-    generated_text = ""
-    for stream_chunk in message:
-        output = stream_chunk["output"]
+@router.get('/sdapi/v1/schedulers')
+async def request_sdschedulers(request : Request):
+    return [
+        {
+            "name": "automatic",
+            "label": "Automatic",
+            "aliases": None,
+            "default_rho": -1,
+            "need_inner_model": False
+        }
+    ]
 
-        # Loop through all choices, if any
-        for choice in output.get('choices', []):
-            # Check if 'delta' and 'content' in choice
-            if 'delta' in choice and 'content' in choice['delta']:
-                # Join the content list into a string
-                joined_content = ''.join(choice['delta']['content'])
-                # Update the 'content' in 'delta' with the joined string
-                generated_text += joined_content
+@router.get('/sdapi/v1/samplers')
+async def request_sdsamplers(request : Request):
+    return [
+        {
+            "name": "Euler a",
+            "aliases": [
+                "k_euler_a",
+                "k_euler_ancestral"
+            ],
+            "options": {
+                "uses_ensd": "True"
+            }
+        }
+    ]
 
-    message[0]["output"]["choices"][0]["delta"]["content"] = generated_text
+@router.get('/sdapi/v1/sd-vae')
+async def request_sdvae(request : Request):
+    return []
 
-    # Return the message as a JSON string
-    return json.dumps(message[0]["output"])
+@router.get('/sdapi/v1/sd-models')
+async def request_sdmodels(request : Request):
+    return [
+        {
+            "title": sdconfig["model"],
+            "model": sdconfig["model"]
+        }
+    ]
+
+@router.get('/sdapi/v1/upscalers')
+async def request_sdupscalers():
+    return []
+
+@router.get('/sdapi/v1/latent-upscale-modes')
+async def request_sd_latent_upscale_modes():
+    return [
+        {
+            "name": "Latent"
+        },
+        {
+            "name": "Latent (antialiased)"
+        },
+        {
+            "name": "Latent (bicubic)"
+        },
+        {
+            "name": "Latent (bicubic antialiased)"
+        },
+        {
+            "name": "Latent (nearest)"
+        },
+        {
+            "name": "Latent (nearest-exact)"
+        }
+    ]
+
+@router.post('/sdapi/v1/options')
+async def request_sd_set_options(request : Request):
+    data = await request.json()
+    print("SD Webui update options:", data)
+    return JSONResponse(status_code=200, content={})
+
+@router.post('/sdapi/v1/txt2img')
+async def request_sd_txt2img(request : Request):
+    import requests
+    data = await request.json()
+    print("SD webui txt2img: ", data)
+
+    headers = {
+        "accept": "application/json",
+        "content-type": "application/json",
+        "authorization": sdconfig["api_key"],
+    }
+    runpodData = {
+        "input": data
+    }
+    response = requests.post(f"https://api.runpod.ai/v2/{sdconfig["endpoint"]}/runsync", headers=headers, json=runpodData, 
+                             timeout=sdconfig["timeout"])
+    if (response.status_code != 200):
+        return JSONResponse(status_code=response.status_code, content=response.json())
+    
+    json = response.json()
+    if "status" in json and json["status"] != "COMPLETED":
+        print(f"txt2img request status={json["status"]}!\n", json)
+        return JSONResponse(status_code=500, content=json)
+    
+    if "output" not in json:
+        print("txt2img request missing output!")
+        return JSONResponse(status_code=500, content=json)
+    
+    print("Image generated, elapsed=",response.elapsed)
+    # actual SD output
+    output = json["output"]
+    return JSONResponse(status_code=200, content=output)
+
 
 # Create a FastAPI application
 app = FastAPI()

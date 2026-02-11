@@ -11,6 +11,11 @@
             "timeout": "OPTIONAL",
             "use_openai_format": "OPTIONAL",
             "batch_size": "OPTIONAL"
+        },
+        {
+            "type": "sd_webui",
+            "endpoint": "",
+            "model": ""
         }
     ],
     
