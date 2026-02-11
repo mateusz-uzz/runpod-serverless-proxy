@@ -193,16 +193,30 @@ def get_chat_synchronous(runpod, chat):
 async def get_chat_asynchronous(runpod, chat):
     # Generate a response from the runpod in an asynchronous manner
     async for chunk in runpod.stream_generate(chat):
-        # Check if the chunk is not cancelled
-        if(chunk['status'] != "CANCELLED"):
-            # Prepare the chat message for SSE
-            prepared_message = prepare_chat_message_for_sse(chunk["stream"])
-            # Encode the prepared message
-            data = f'data: {prepared_message}\n\n'.encode('utf-8')
-            yield data
+        # print("STREAMING CHUNK=", type(chunk), chunk)
+        # some events are dicts with status
+        if isinstance(chunk, dict):
+
+            if chunk.get("status") == "CANCELLED":
+                raise HTTPException(status_code=408, detail="Request timed out.")
+
+            stream = chunk.get("stream")
+
         else:
-            # If the request is cancelled, raise an exception
-            raise HTTPException(status_code=408, detail="Request timed out.")
+            # sometimes you get the raw list directly
+            stream = chunk
+
+        if not stream:
+            continue
+
+        # stream is always a list of {"output": "..."}
+        for item in stream:
+            output = item.get("output")
+            if not output:
+                continue
+
+            # just forward exactly as received
+            yield output.encode("utf-8")
 
 # Function to get synchronous response
 def get_synchronous(runpod, prompt):
